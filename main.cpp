@@ -54,6 +54,7 @@ public:
 
 class TServer
 {
+
 public:
     int openSession(){
         int 		listenfd, connfd;
@@ -110,59 +111,7 @@ public:
     }
 };
 
-class TClient
-{
-public:
-    int openSession(){
-        int     sockfd, n;
-        char    recvline[MAXLINE + 1];
-        sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if(sockfd < 0) {
-            std::cerr << "socket error" << std::endl;
-            return ERROR_NUMER_RETURN;
-        }
 
-        struct sockaddr_in servaddr;
-        memset(&servaddr, 0, sizeof (servaddr));
-        servaddr.sin_family = AF_INET;
-        servaddr.sin_port = htons(SERV_PORT);
-        servaddr.sin_addr.s_addr = inet_addr(SERVER_IP4_ADDR);
-        if(inet_pton(AF_INET, SERVER_IP4_ADDR, &servaddr.sin_addr) <= 0) {
-            std::cerr << "inet_pton error for" << SERVER_IP4_ADDR << std::endl;
-            return ERROR_NUMER_RETURN;
-        }
-
-        if(connect(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
-            std::cerr << "connect error " << errno << std::endl;
-        }
-
-        while ( (n = read(sockfd, recvline, MAXLINE)) > 0)
-        {
-            recvline[n] = 0;	/* null terminate */
-            if (fputs(recvline, stdout) == EOF)
-                std::cerr << "fputs error" << std::endl;
-        }
-        if (n < 0)
-            std::cerr << "read error" << std::endl;
-        close(sockfd);
-        return 0;
-    }
-
-    void worker()  {
-
-        std::cout << "worker client" << std::endl;
-        for(size_t i = 0; i < 100; i++) {
-            std::cout << std::endl << "Client: open session" << std::endl;
-            openSession();
-            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-        }
-    }
-    TClient() {
-    }
-    ~TClient() {
-        std::cout << "detructor client" << std::endl;
-    }
-};
 
 
 
@@ -172,9 +121,6 @@ int main(int argc, char **argv)
     TServer server;
     std::thread t(&TServer::worker, &server);
     thread_guard g(t);
-    TClient client;
-    std::thread tclient(&TClient::worker, &client);
-    thread_guard g_client(tclient);
 
     return 0;
 }

@@ -7,9 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #find_package(Threads REQUIRED)
 SET(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-std=c++11 -pthread")
 
+#find_package(X11 REQUIRED)
+#link_libraries(${X11_LIBRARIES})
+#include_directories(${X11_INCLUDE_DIR})
 
-find_package(X11 REQUIRED)
-link_libraries(${X11_LIBRARIES})
-include_directories(${X11_INCLUDE_DIR})
-
-add_executable(proxy-server main.cpp proxyserver.h proxyserver.cpp )
+add_executable(proxy-server main.cpp proxyserver.h proxyserver.cpp urls.h urls.cpp)

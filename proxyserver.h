@@ -17,7 +17,10 @@
 #include <unordered_map>
 #include <netdb.h>
 #include <time.h>
+#include <unordered_set>
+#include <list>
 
+#define MAX_PACKET_SIZE         65535		// Размер буфера для чтения recv
 #define	MAXLINE					4096    /* max text line length */
 #define ERROR_NUMER_RETURN  	-1
 #define SOCK_MAX_CONN			2048
@@ -56,46 +59,65 @@ public:
     scoped_thread& operator=(scoped_thread const&)=delete;
 };
 
+enum STATE_PARS {STATE_PARS_INIT, STATE_PARS_NEXT};
+
+struct Package {
+    union HeaderPack {
+        uint32_t _header;
+        struct __header{
+            uint32_t size: 24;
+            uint8_t id: 8;           // Командная фаза, сбрасывается в нуль при новой фазе
+        } head;
+    } package;
+    std::list<std::pair<char*, int>> buffer;
+    int8_t current_size;
+};
+
+struct InfoConnect {
+    Package client;
+    Package server;
+//    int index_package;  // номер пакета
+    std::string sql_version;
+};
+
 using SOCKET = int;
+struct Request {
+    char *data = NULL;          // Sql пакет
+    std::string sSrcREST;
+    std::string sReqHTTP;
+    std::string sServer;
+    std::string sPath;
+    std::string sFileName;
+    sockaddr_in sockaddr;
+    SOCKET		sockfd;
+    int totalLength = 0;
+    bool done = false;
+};
 
 class Server
 {
-    std::thread thr_loop;
     std::thread thr_connect_handler;
-    std::thread thr_main;
     std::mutex mtx_connections;
-    std::queue<int> connections;
-    void pushConnectionSafeThr(int conn);
-    int popConnectSafeThr();
+    std::unordered_map<int, Request> connections;
+    std::unordered_set<int> set;
+
+    void pushConnectionSafeThr(Request &req);
+    Request popConnectSafeThr();
+
     struct sockaddr_in cliaddr, servaddr;
     int	listenfd;
 
+
+    void forwardRequest(int sockfd);
+
     // Сетевые
-    struct Request {
-        char *data = NULL;
-        std::string sSrcREST;
-        std::string sReqHTTP;
-        std::string sServer;
-        std::string sPath;
-        std::string sFileName;
-        sockaddr_in sockaddr;
-        SOCKET		sock;
-        int totalLength = 0;
-        bool done = false;
-    };
-//    Urls url;
+
     fd_set fdread;
-    std::unordered_map<SOCKET, Request> mapRequests;
-    void procMapRequests();
-    int createRequest();
-    int setRequest(std::string a_sSrcREST, Request &req);
-    int execRequest(Request &req);
-    void parseUrl(const char *mUrl, std::string &serverName, std::string &filepath, std::string &filename);
+
 public:
     Server();
     void loop();
     void connectionsHandler();
-    void mainThread();
 };
 
 }

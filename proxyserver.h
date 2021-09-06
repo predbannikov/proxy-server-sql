@@ -14,11 +14,12 @@
 #include <mutex>
 #include <vector>
 #include <condition_variable>
-#include <unordered_map>
 #include <netdb.h>
 #include <time.h>
 #include <unordered_set>
+#include <map>
 #include <list>
+#include <stack>
 
 #define MAX_PACKET_SIZE         65535		// Размер буфера для чтения recv
 #define	MAXLINE					4096    /* max text line length */
@@ -61,24 +62,37 @@ public:
 
 enum STATE_PARS {STATE_PARS_INIT, STATE_PARS_NEXT};
 
-struct Package {
-    union HeaderPack {
-        uint32_t _header;
-        struct __header{
-            uint32_t size: 24;
-            uint8_t id: 8;           // Командная фаза, сбрасывается в нуль при новой фазе
-        } head;
-    } package;
-    std::list<std::pair<char*, int>> buffer;
-    int8_t current_size;
+
+
+struct SocketInfo {
+    SocketInfo() {
+        clear();
+    }
+    int initPackSeq(char *buff, int offset);
+    void clear() {
+        buffer.clear();
+        buffer[0] = new std::list<std::pair<char*, int>>;
+        size = 0;
+        id = 0;
+        current_size = 0;
+    }
+    std::string name;
+    std::map<int, std::list<std::pair<char*, int>>*> buffer;
+    std::queue<int> ready_send_nums;
+    std::stack<int> stack_test_recv;
+    std::stack<int> stack_test_send;
+    uint8_t id;                 // Командная фаза, сбрасывается в нуль при новой фазе
+    uint32_t size;
+    uint32_t current_size = 0;
+    std::string sql_version;
+    int socket;
 };
 
-struct InfoConnect {
-    Package client;
-    Package server;
-//    int index_package;  // номер пакета
-    std::string sql_version;
+struct Connection {
+    SocketInfo client;
+    SocketInfo server;
 };
+
 
 using SOCKET = int;
 struct Request {
@@ -98,11 +112,8 @@ class Server
 {
     std::thread thr_connect_handler;
     std::mutex mtx_connections;
-    std::unordered_map<int, Request> connections;
     std::unordered_set<int> set;
 
-    void pushConnectionSafeThr(Request &req);
-    Request popConnectSafeThr();
 
     struct sockaddr_in cliaddr, servaddr;
     int	listenfd;
@@ -113,11 +124,18 @@ class Server
     // Сетевые
 
     fd_set fdread;
-
+    std::list<std::pair<char*, int>>* readData(SocketInfo &sockInfo);
+    int readMessage(SocketInfo &sockInfo);
+    int sendMessage(SocketInfo &sockInfo, int sock_to);
+    void debug_traffic(std::string name, char *buff, int len);
+    void parseSendError(int ret);
 public:
     Server();
     void loop();
     void connectionsHandler();
+private:
+    void get_version(SocketInfo &packag);
+    void printBuffer(std::list<std::pair<char*, int>> &buffer);
 };
 
 }

@@ -18,4 +18,4 @@ link_directories(${FULL_PATH_TO_MYSQL_CONNECTOR_CPP_DIR}/lib)
 #link_libraries(${X11_LIBRARIES})
 #include_directories(${X11_INCLUDE_DIR})
 
-add_executable(proxy-server main.cpp proxyserver.h proxyserver.cpp urls.h urls.cpp)
+add_executable(proxy-server main.cpp proxyserver.h proxyserver.cpp )

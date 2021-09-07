@@ -21,14 +21,15 @@
 #include <list>
 #include <stack>
 
-#define MAX_PACKET_SIZE         65535		// Размер буфера для чтения recv
+#define MAX_PACKET_SIZE         4096		// Размер буфера для чтения recv
 #define	MAXLINE					4096    /* max text line length */
 #define ERROR_NUMER_RETURN  	-1
 #define SOCK_MAX_CONN			2048
-#define COUNT_REST_REQUEST		50
 #define SERVER_IP4_ADDR 		"192.168.0.101"
 #define SERV_PORT 				1500
-#define	ONLYLOCALHOST			0
+#define SQL_SERVER_ADDRESS      "127.0.0.1"
+#define SQL_SERVER_PORT         3306
+#define OFFSET_DATA_HEADER      4
 
 namespace ProxyServer {
 
@@ -66,21 +67,22 @@ enum STATE_PARS {STATE_PARS_INIT, STATE_PARS_NEXT};
 
 struct SocketInfo {
     SocketInfo() {
-        clear();
-    }
-    int initPackSeq(char *buff, int offset);
-    void clear() {
-        buffer.clear();
-        buffer[0] = new std::list<std::pair<char*, int>>;
+        buffer = new std::pair<int, std::list<std::pair<char*, int>>*> {0, new std::list<std::pair<char*, int>> };
         size = 0;
         id = 0;
         current_size = 0;
     }
+    int initPackSeq(char *buff, int offset);
+    void newPhase() {
+        size = 0;
+        id = 0;
+        buffer = new std::pair<int, std::list<std::pair<char*, int>>*> {id, new std::list<std::pair<char*, int>> };
+        current_size = 0;
+    }
     std::string name;
-    std::map<int, std::list<std::pair<char*, int>>*> buffer;
-    std::queue<int> ready_send_nums;
-    std::stack<int> stack_test_recv;
-    std::stack<int> stack_test_send;
+    std::pair<int, std::list<std::pair<char*, int>>*> *buffer;
+    std::queue<std::pair<int, std::list<std::pair<char*, int>>*>*> date_to_send;
+    std::list<std::map<int, std::list<std::pair<char*, int>>>> hystory;
     uint8_t id;                 // Командная фаза, сбрасывается в нуль при новой фазе
     uint32_t size;
     uint32_t current_size = 0;
@@ -127,7 +129,7 @@ class Server
     std::list<std::pair<char*, int>>* readData(SocketInfo &sockInfo);
     int readMessage(SocketInfo &sockInfo);
     int sendMessage(SocketInfo &sockInfo, int sock_to);
-    void debug_traffic(std::string name, char *buff, int len);
+    void debug_traffic(std::string name, std::string func, char *buff, int len);
     void parseSendError(int ret);
 public:
     Server();

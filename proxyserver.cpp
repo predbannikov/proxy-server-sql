@@ -1,8 +1,6 @@
 #include "proxyserver.h"
 #include <algorithm>
-#define SQL_SERVER_ADDRESS      "127.0.0.1"
-#define SQL_SERVER_PORT         3306
-#define OFFSET_DATA_HEADER      4
+
 
 #define CHAR_OUT_LAMBDA [](const unsigned char & byte) { if(byte > 31 && byte ) {std::cout << byte << std::flush; } }
 
@@ -106,20 +104,22 @@ int Server::forwardRequest(int sockfd)
             if(FD_ISSET(conn.client.socket, &fdset)) {
                 if((ret = readMessage(conn.client)) < 0)
                     return printError(conn, ret, "client readMessage");
+                else if(ret == 0)
+                    return 0;
 
-                if(!conn.client.ready_send_nums.empty())
-                    if((ret = sendMessage(conn.client, conn.server.socket)) < 0)
-                        return printError(conn, ret, "client sendMessage");
+                if((ret = sendMessage(conn.client, conn.server.socket)) < 0)
+                    return printError(conn, ret, "client sendMessage");
 
             }
             if(FD_ISSET(conn.server.socket, &fdset)) {
 
                 if((ret = readMessage(conn.server)) < 0)
                     return printError(conn, ret, "server readMessage");
+                else if(ret == 0)
+                    return 0;
 
-                if(!conn.server.ready_send_nums.empty())
-                    if((ret = sendMessage(conn.server, conn.client.socket)) < 0)
-                        return printError(conn, ret, "server sendMessage");
+                if((ret = sendMessage(conn.server, conn.client.socket)) < 0)
+                    return printError(conn, ret, "server sendMessage");
 
             }
         }
@@ -134,14 +134,11 @@ std::list<std::pair<char*, int>>* Server::readData(SocketInfo &sockInfo)
 
 int Server::readMessage(SocketInfo &sockInfo)
 {
-    char buff[MAX_PACKET_SIZE];
+    char *buff = (char*)malloc(MAX_PACKET_SIZE);
     int len;
     int offset = 0;
     try {
         len = recv(sockInfo.socket, buff, MAX_PACKET_SIZE, 0);
-        if(*reinterpret_cast<uint32_t*>(buff) == 0x0000003a) {
-            //                std::cout << "stop" << std::endl;
-        }
         if(len == 0) {
             std::cout << "stop" << std::endl;
             return 0;
@@ -150,22 +147,25 @@ int Server::readMessage(SocketInfo &sockInfo)
             std::cout << "recv error" << std::endl;
             throw ;
         }
-        int lenght = len;
+//        debug_traffic(sockInfo.name, "recv", buff, len);
         while (len > 0) { // если длина всё ещё больше ожидаемого следующего размера запускаем снова
+
             sockInfo.initPackSeq(buff, offset);            // узнаём данные следующего пакета
 
             size_t remaind_length_buff = len < sockInfo.size + OFFSET_DATA_HEADER ? len : sockInfo.size + OFFSET_DATA_HEADER;
             // кладём буфер в список полученных кадров и указываем длину буфера
-            sockInfo.buffer[sockInfo.id]->push_back({&buff[offset], remaind_length_buff});
+            sockInfo.buffer->second->push_back({&buff[offset], remaind_length_buff});
             len -= remaind_length_buff;                                        // уменьшаем длину полученного буфера на длину записанного пакета
             offset += remaind_length_buff;                                     // записываем наше смещение в буфере
             sockInfo.current_size += remaind_length_buff;
+
+
+
             if(sockInfo.current_size == sockInfo.size + OFFSET_DATA_HEADER) {
-                sockInfo.ready_send_nums.push(sockInfo.id);
+                sockInfo.date_to_send.push(sockInfo.buffer);
+                sockInfo.buffer = new std::pair<int, std::list<std::pair<char*, int>>*>;
                 sockInfo.current_size = 0;
             }
-            if(offset >= lenght)    //
-                break;
         }
 
     }  catch (...) {
@@ -173,28 +173,28 @@ int Server::readMessage(SocketInfo &sockInfo)
         std::cerr << strerror(errno) << std::endl;
         return -1;
     }
-    return 0;
+    return 1;
 }
 
 int Server::sendMessage(SocketInfo &sockInfo, int sock_to)
 {
+    static int debug_int;
     try {
-        while(!sockInfo.ready_send_nums.empty()) {
+        while(!sockInfo.date_to_send.empty()) {
             int ret = 0;
-            size_t idx = sockInfo.ready_send_nums.front();
-            sockInfo.stack_test_send.push(idx);
-            sockInfo.ready_send_nums.pop();
-            for(auto it = sockInfo.buffer.at(idx)->begin(); it != sockInfo.buffer.at(idx)->end(); it++) {
+            std::pair<int, std::list<std::pair<char*, int>>*> *buffer = sockInfo.date_to_send.front();
+            sockInfo.date_to_send.pop();
+            for(auto it = buffer->second->begin(); it != buffer->second->end(); it++) {
                 if((ret = send(sock_to, it->first, it->second, MSG_NOSIGNAL)) < 0) {
+                    std::cerr << "send error " << std::strerror(errno) << std::endl;
                     this->parseSendError(ret);
                     throw ;
                 }
-                debug_traffic(sockInfo.name, it->first, it->second);
+                debug_traffic(sockInfo.name, "send", it->first, it->second);
 //              TODO  delete []it->first;
             }
-//            sockInfo.buffer.erase(sockInfo.buffer.begin());
+//            sockInfo.hystory.push_back(buffer);
         }
-
     }  catch (...) {
         std::cout << "ERROR: int Server::sendMessage(SocketInfo&)" << std::endl;
         return errno;
@@ -202,9 +202,9 @@ int Server::sendMessage(SocketInfo &sockInfo, int sock_to)
     return 0;
 }
 
-void Server::debug_traffic(std::string name, char *buff, int len)
+void Server::debug_traffic(std::string name, std::string func, char *buff, int len)
 {
-    std::cout << name << " send=" << len << " " << "\t";
+    std::cout << name << " " << func << "=" << len << " " << "\t";
     for(size_t i = 0; i < 4; i++)
         std::cout << (static_cast<uint>(buff[i])&0xFF) << " ";
     std::cout << "\t";
@@ -237,18 +237,22 @@ void Server::loop() {
         close(listenfd);
         return ;
     }
+//    static int debug_int = 0;
     while(true) {
         // ждём соединения
         clilen = sizeof (cliaddr);
         Request req;
         req.sockfd = (SOCKET)accept(listenfd, (struct sockaddr*)&cliaddr, &clilen);
+//        if(debug_int > 0)
+//            continue;
         if(set.find(req.sockfd) == set.end()) {
             printf("connect from %s, port %d \en \n", inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
             set.insert(req.sockfd);
             std::thread thread(&Server::forwardRequest, this, req.sockfd);
             thread.detach();
+//            debug_int++;
         }
-        req.sockaddr = cliaddr;
+//        req.sockaddr = cliaddr;
     }
 }
 
@@ -295,14 +299,21 @@ void Server::parseSendError(int ret)
 
 int SocketInfo::initPackSeq(char *buff, int offset)
 {
-    // узнаём данные следующего пакета
-    uint8_t old_id = id;
-    id = (*reinterpret_cast<uint32_t*>(buff) >> 24);
-    if(id == 0) {
-        clear();
+    if(current_size == 0) {
+        if(id == 0) {
+            newPhase();
+        } else {
+            id = (*reinterpret_cast<uint32_t*>(buff) >> 24);
+            buffer->first = id;
+            buffer->second = new std::list<std::pair<char*, int>>;
+        }
+        size = (*reinterpret_cast<uint32_t*>(&buff[offset]) & 0x00FFFFFF);
     }
-    if(id != old_id)
-        buffer[id] = new std::list<std::pair<char*, int>>;
-    size = (*reinterpret_cast<uint32_t*>(&buff[offset]) & 0x00FFFFFF);
+    // узнаём данные следующего пакета
+
+//    else if(id != old_id) {
+//        dat_to_send.push(buffer);
+//        buffer = new std::pair<int, std::list<std::pair<char*, int>>*> {id, new std::list<std::pair<char*, int>> };
+//    }
     return 0;
 }

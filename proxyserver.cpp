@@ -13,10 +13,13 @@ Server::Server() {
 
 }
 
-void printError(Connection &conn, int error, std::string str) {
-    close(conn.client.socket);
-    close(conn.server.socket);
+int printError(Connection &conn, int error, std::string str) {
+    if(conn.server.socket != 0)
+        close(conn.server.socket);
+    if(conn.client.socket != 0)
+        close(conn.client.socket);
     std::cerr << std::endl << "error:[" << error << "] " << std::strerror(error) << " : " << str  << std::endl;
+    return error;
 }
 
 /*
@@ -55,17 +58,15 @@ void ProxyServer::Server::printBuffer(std::list<std::pair<char *, int> > &buffer
 }
 */
 
-void Server::forwardRequest(int sockfd)
+int Server::forwardRequest(int sockfd)
 {
     Connection conn;
     conn.client.name = "client";
     conn.server.name = "server";
     conn.server.socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (conn.server.socket < 0) {
-        std::cout << "create socket failed with INVALID_SOCKET" << errno << std::endl;
-        close(sockfd);
-        return;
-    }
+    if (conn.server.socket < 0)
+        return printError(conn, errno, "create socket failed with INVALID_SOCKET");
+
     conn.client.socket = sockfd;
 
     struct hostent *hp;
@@ -78,20 +79,16 @@ void Server::forwardRequest(int sockfd)
         hp = gethostbyaddr((char*)&addr, sizeof(addr), AF_INET);
     }
 
-    if (hp == NULL)
-    {
-        printError(conn, errno, "get ip address host");
-        return ;
-    }
+    if (hp == NULL)        
+        return printError(conn, errno, "get ip address host");
+
     sockaddr_in internetAddr;
     internetAddr.sin_family = AF_INET;
     internetAddr.sin_port = htons(SQL_SERVER_PORT);
     internetAddr.sin_addr.s_addr = *((unsigned long*)hp->h_addr);
     if (connect(conn.server.socket, (struct sockaddr*) &internetAddr, sizeof(internetAddr)))
-    {
-        printError(conn, errno, "sql-server connect failed");
-        return ;
-    }
+        return printError(conn, errno, "sql-server connect failed");
+
     int n = 0, ret = 0;
     fd_set fdset;
     STATE_PARS state = STATE_PARS_INIT;
@@ -101,37 +98,29 @@ void Server::forwardRequest(int sockfd)
         FD_SET(conn.server.socket, &fdset);
         timeval timeout {10};
         n = select(std::max(conn.client.socket, conn.server.socket)+1, &fdset, NULL, NULL, &timeout);
-        if (n < 0) {
-            printError(conn, errno, "select fdset");
-            return;
-        } else if (n == 0) {
-            printError(conn, errno, "time waiting out");
-            return;
-        } else {
+        if (n < 0)
+            return printError(conn, errno, "select fdset");
+        else if (n == 0)
+            return printError(conn, errno, "time waiting out");
+        else {
             if(FD_ISSET(conn.client.socket, &fdset)) {
-                if((ret = readMessage(conn.client)) < 0) {
-                    printError(conn, ret, "client readMessage");
-                    return;
-                }
+                if((ret = readMessage(conn.client)) < 0)
+                    return printError(conn, ret, "client readMessage");
+
                 if(!conn.client.ready_send_nums.empty())
-                    std::cout << "is_set client send" << std::endl;
-                if((ret = sendMessage(conn.client, conn.server.socket)) < 0) {
-                    printError(conn, ret, "client sendMessage");
-                    return;
-                }
+                    if((ret = sendMessage(conn.client, conn.server.socket)) < 0)
+                        return printError(conn, ret, "client sendMessage");
+
             }
             if(FD_ISSET(conn.server.socket, &fdset)) {
 
-                if((ret = readMessage(conn.server)) < 0) {
-                    printError(conn, ret, "server readMessage");
-                    return;
-                }
+                if((ret = readMessage(conn.server)) < 0)
+                    return printError(conn, ret, "server readMessage");
+
                 if(!conn.server.ready_send_nums.empty())
-                    std::cout << "is_set server send" << std::endl;
-                if((ret = sendMessage(conn.server, conn.client.socket)) < 0) {
-                    printError(conn, ret, "server sendMessage");
-                    return;
-                }
+                    if((ret = sendMessage(conn.server, conn.client.socket)) < 0)
+                        return printError(conn, ret, "server sendMessage");
+
             }
         }
     }
@@ -147,52 +136,37 @@ int Server::readMessage(SocketInfo &sockInfo)
 {
     char buff[MAX_PACKET_SIZE];
     int len;
-    int offset;
+    int offset = 0;
     try {
+        len = recv(sockInfo.socket, buff, MAX_PACKET_SIZE, 0);
+        if(*reinterpret_cast<uint32_t*>(buff) == 0x0000003a) {
+            //                std::cout << "stop" << std::endl;
+        }
+        if(len == 0) {
+            std::cout << "stop" << std::endl;
+            return 0;
+        }
+        if(len < 0) {
+            std::cout << "recv error" << std::endl;
+            throw ;
+        }
+        int lenght = len;
+        while (len > 0) { // если длина всё ещё больше ожидаемого следующего размера запускаем снова
+            sockInfo.initPackSeq(buff, offset);            // узнаём данные следующего пакета
 
-
-            len = recv(sockInfo.socket, buff, MAX_PACKET_SIZE, 0);
-            if(*reinterpret_cast<uint32_t*>(buff) == 0x0000003a) {
-                std::cout << "stop" << std::endl;
-            }
-            if(len == 0) {
-                std::cout << "stop" << std::endl;
-                return 0;
-            }
-            int lenght = len;
-            offset = 0;
-            while (len > (*reinterpret_cast<uint32_t*>(&buff[offset]) & 0x00FFFFFF) + OFFSET_DATA_HEADER){ // если длина всё ещё больше ожидаемого следующего размера запускаем снова {
-                // узнаём данные следующего пакета
-                sockInfo.initPackSeq(buff, offset);
-                            // кладём буфер в список полученных кадров и указываем длину буфера
-                sockInfo.buffer[sockInfo.id]->push_back({&buff[offset], sockInfo.size + OFFSET_DATA_HEADER});
-                len -= sockInfo.size + OFFSET_DATA_HEADER;      // уменьшаем длину полученного буфера на длину записанного пакета
-                offset += sockInfo.size + OFFSET_DATA_HEADER;   // записываем наше смещение в буфере
-                sockInfo.current_size += sockInfo.size + OFFSET_DATA_HEADER;
-                sockInfo.ready_send_nums.push(sockInfo.id);
-                sockInfo.stack_test_recv.push(sockInfo.id);
-                sockInfo.current_size = 0;
-                if(offset >= lenght)    //
-                    break;
-
-            }
-            sockInfo.initPackSeq(buff, offset);
-                        // кладём буфер в список полученных кадров и указываем длину буфера
-            sockInfo.buffer[sockInfo.id]->push_back({&buff[offset], len});
-            sockInfo.current_size += len;
+            size_t remaind_length_buff = len < sockInfo.size + OFFSET_DATA_HEADER ? len : sockInfo.size + OFFSET_DATA_HEADER;
+            // кладём буфер в список полученных кадров и указываем длину буфера
+            sockInfo.buffer[sockInfo.id]->push_back({&buff[offset], remaind_length_buff});
+            len -= remaind_length_buff;                                        // уменьшаем длину полученного буфера на длину записанного пакета
+            offset += remaind_length_buff;                                     // записываем наше смещение в буфере
+            sockInfo.current_size += remaind_length_buff;
             if(sockInfo.current_size == sockInfo.size + OFFSET_DATA_HEADER) {
                 sockInfo.ready_send_nums.push(sockInfo.id);
-                sockInfo.stack_test_recv.push(sockInfo.id);
                 sockInfo.current_size = 0;
             }
-
-
-
-
-            if(len < 0) {
-                std::cout << "recv error" << std::endl;
-                throw ;
-            }
+            if(offset >= lenght)    //
+                break;
+        }
 
     }  catch (...) {
         std::cout << "ERROR: int Server::readMessage(SocketInfo&)" << std::endl;

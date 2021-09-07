@@ -85,7 +85,7 @@ struct SocketInfo {
     uint32_t size;
     uint32_t current_size = 0;
     std::string sql_version;
-    int socket;
+    int socket = 0;
 };
 
 struct Connection {
@@ -119,7 +119,7 @@ class Server
     int	listenfd;
 
 
-    void forwardRequest(int sockfd);
+    int forwardRequest(int sockfd);
 
     // Сетевые
 

@@ -102,10 +102,8 @@ int Server::forwardRequest(int sockfd)
             return printError(conn, errno, "time waiting out");
         else {
             if(FD_ISSET(conn.client.socket, &fdset)) {
-                if((ret = readMessage(conn.client)) < 0)
+                if((ret = readMessage(conn.client)) <= 0)
                     return printError(conn, ret, "client readMessage");
-                else if(ret == 0)
-                    return 0;
 
                 if((ret = sendMessage(conn.client, conn.server.socket)) < 0)
                     return printError(conn, ret, "client sendMessage");
@@ -113,10 +111,8 @@ int Server::forwardRequest(int sockfd)
             }
             if(FD_ISSET(conn.server.socket, &fdset)) {
 
-                if((ret = readMessage(conn.server)) < 0)
+                if((ret = readMessage(conn.server)) <= 0)
                     return printError(conn, ret, "server readMessage");
-                else if(ret == 0)
-                    return 0;
 
                 if((ret = sendMessage(conn.server, conn.client.socket)) < 0)
                     return printError(conn, ret, "server sendMessage");
@@ -134,6 +130,7 @@ std::list<std::pair<char*, int>>* Server::readData(SocketInfo &sockInfo)
 
 int Server::readMessage(SocketInfo &sockInfo)
 {
+    static int debug_int;
     char *buff = (char*)malloc(MAX_PACKET_SIZE);
     int len;
     int offset = 0;
@@ -147,22 +144,24 @@ int Server::readMessage(SocketInfo &sockInfo)
             std::cout << "recv error" << std::endl;
             throw ;
         }
+        if(len > 3000) {
+            debug_int++;
+        }
 //        debug_traffic(sockInfo.name, "recv", buff, len);
         while (len > 0) { // если длина всё ещё больше ожидаемого следующего размера запускаем снова
 
-            sockInfo.initPackSeq(buff, offset);            // узнаём данные следующего пакета
+            sockInfo.initPackSeq(buff, offset, len);            // узнаём данные следующего пакета
 
-            size_t remaind_length_buff = len < sockInfo.size + OFFSET_DATA_HEADER ? len : sockInfo.size + OFFSET_DATA_HEADER;
             // кладём буфер в список полученных кадров и указываем длину буфера
-            sockInfo.buffer->second->push_back({&buff[offset], remaind_length_buff});
-            len -= remaind_length_buff;                                        // уменьшаем длину полученного буфера на длину записанного пакета
-            offset += remaind_length_buff;                                     // записываем наше смещение в буфере
-            sockInfo.current_size += remaind_length_buff;
-
-
+            sockInfo.buffer->second->push_back({&buff[offset], sockInfo.remaind_length_buff});
+            len -= sockInfo.remaind_length_buff;                                        // уменьшаем длину полученного буфера на длину записанного пакета
+            offset += sockInfo.remaind_length_buff;                                     // записываем наше смещение в буфере
+            sockInfo.current_size += sockInfo.remaind_length_buff;
 
             if(sockInfo.current_size == sockInfo.size + OFFSET_DATA_HEADER) {
+                // в очередь на отправку добавляем готовый пакет
                 sockInfo.date_to_send.push(sockInfo.buffer);
+                // создаём сразу память для следующей последовательности данных
                 sockInfo.buffer = new std::pair<int, std::list<std::pair<char*, int>>*>;
                 sockInfo.current_size = 0;
             }
@@ -193,7 +192,7 @@ int Server::sendMessage(SocketInfo &sockInfo, int sock_to)
                 debug_traffic(sockInfo.name, "send", it->first, it->second);
 //              TODO  delete []it->first;
             }
-//            sockInfo.hystory.push_back(buffer);
+            sockInfo.hystory.push_back(buffer);
         }
     }  catch (...) {
         std::cout << "ERROR: int Server::sendMessage(SocketInfo&)" << std::endl;
@@ -202,13 +201,30 @@ int Server::sendMessage(SocketInfo &sockInfo, int sock_to)
     return 0;
 }
 
-void Server::debug_traffic(std::string name, std::string func, char *buff, int len)
+void Server::debug_traffic(std::string name, std::string func, const char *buff, int len)
 {
     std::cout << name << " " << func << "=" << len << " " << "\t";
     for(size_t i = 0; i < 4; i++)
         std::cout << (static_cast<uint>(buff[i])&0xFF) << " ";
     std::cout << "\t";
-    for(int i=3; i < len; i++) CHAR_OUT_LAMBDA(buff[i]);
+    std::string tmp = "SELECT";
+    int idx = 0;
+
+    for(int i=4; i < len; i++) {
+        if(buff[i] == tmp[idx]) {
+            idx++;
+            if(idx==6) {
+                std::cout << "found" << std::endl;
+                for(int i = 0; i < len; i++) {
+                    std::cout << std::hex << (0xFF&buff[i]) << ":";
+                }
+                std::cout << std::endl << "--------------------------------------------------" << std::endl;
+            }
+        } else{
+            idx = 0;
+        }
+        CHAR_OUT_LAMBDA(buff[i]);
+    }
     std::cout << std::endl;
 
 }
@@ -251,6 +267,8 @@ void Server::loop() {
             std::thread thread(&Server::forwardRequest, this, req.sockfd);
             thread.detach();
 //            debug_int++;
+        } else {
+            printf("alredy connect from %s, port %d \en \n", inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
         }
 //        req.sockaddr = cliaddr;
     }
@@ -297,7 +315,7 @@ void Server::parseSendError(int ret)
     }
 }
 
-int SocketInfo::initPackSeq(char *buff, int offset)
+int SocketInfo::initPackSeq(char *buff, int offset, int len)
 {
     if(current_size == 0) {
         if(id == 0) {
@@ -308,6 +326,9 @@ int SocketInfo::initPackSeq(char *buff, int offset)
             buffer->second = new std::list<std::pair<char*, int>>;
         }
         size = (*reinterpret_cast<uint32_t*>(&buff[offset]) & 0x00FFFFFF);
+        remaind_length_buff = len < size + OFFSET_DATA_HEADER ? len : size + OFFSET_DATA_HEADER;
+    } else {
+        remaind_length_buff = size - remaind_length_buff + OFFSET_DATA_HEADER;
     }
     // узнаём данные следующего пакета
 

@@ -31,6 +31,43 @@
 #define SQL_SERVER_PORT         3306
 #define OFFSET_DATA_HEADER      4
 
+
+#define COM_SLEEP               0x00
+#define COM_QUIT                0x01
+#define COM_INIT_DB             0x02
+#define COM_QUERY               0x03
+#define COM_FIELD_LIST          0x04
+#define COM_CREATE_DB           0x05
+#define COM_DROP_DB             0x06
+#define COM_REFRESH             0x07
+#define COM_SHUTDOWN            0x08
+#define COM_STATISTICS          0x09
+#define COM_PROCESS_INFO        0x0a
+#define COM_CONNECT             0x0b
+#define COM_PROCESS_KILL        0x0c
+#define COM_DEBUG               0x0d
+#define COM_PING                0x0e
+#define COM_TIME                0x0f
+#define COM_DELAYED_INSERT      0x10
+#define COM_CHANGE_USER         0x11
+#define COM_BINLOG_DUMP         0x12
+#define COM_TABLE_DUMP          0x13
+#define COM_CONNECT_OUT         0x14
+#define COM_REGISTER_SLAVE      0x15
+#define COM_STMT_PREPARE        0x16
+#define COM_STMT_EXECUTE        0x17
+#define COM_STMT_SEND_LONG_DATA 0x18
+#define COM_STMT_CLOSE          0x19
+#define COM_STMT_RESET          0x1a
+#define COM_SET_OPTION          0x1b
+#define COM_STMT_FETCH          0x1c
+#define COM_DAEMON              0x1d
+#define COM_BINLOG_DUMP_GTID    0x1e
+#define COM_RESET_CONNECTION    0x1f
+
+#define LOCAL_INFILE_REQ        0xFB
+
+
 namespace ProxyServer {
 
 
@@ -72,7 +109,7 @@ struct SocketInfo {
         id = 0;
         current_size = 0;
     }
-    int initPackSeq(char *buff, int offset);
+    int initPackSeq(char *buff, int offset, int len);
     void newPhase() {
         size = 0;
         id = 0;
@@ -82,10 +119,11 @@ struct SocketInfo {
     std::string name;
     std::pair<int, std::list<std::pair<char*, int>>*> *buffer;
     std::queue<std::pair<int, std::list<std::pair<char*, int>>*>*> date_to_send;
-    std::list<std::map<int, std::list<std::pair<char*, int>>>> hystory;
+    std::list<std::pair<int, std::list<std::pair<char*, int>>*>*> hystory;
     uint8_t id;                 // Командная фаза, сбрасывается в нуль при новой фазе
     uint32_t size;
     uint32_t current_size = 0;
+    uint32_t remaind_length_buff = 0;
     std::string sql_version;
     int socket = 0;
 };
@@ -129,7 +167,7 @@ class Server
     std::list<std::pair<char*, int>>* readData(SocketInfo &sockInfo);
     int readMessage(SocketInfo &sockInfo);
     int sendMessage(SocketInfo &sockInfo, int sock_to);
-    void debug_traffic(std::string name, std::string func, char *buff, int len);
+    void debug_traffic(std::string name, std::string func, const char *buff, int len);
     void parseSendError(int ret);
 public:
     Server();

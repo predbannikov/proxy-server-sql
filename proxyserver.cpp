@@ -89,7 +89,6 @@ int Server::forwardRequest(int sockfd)
 
     int n = 0, ret = 0;
     fd_set fdset;
-    STATE_PARS state = STATE_PARS_INIT;
     while (true) {
         FD_ZERO(&fdset);
         FD_SET(conn.client.socket, &fdset);
@@ -120,12 +119,6 @@ int Server::forwardRequest(int sockfd)
             }
         }
     }
-}
-
-std::list<std::pair<char*, int>>* Server::readData(SocketInfo &sockInfo)
-{
-
-    return nullptr;
 }
 
 int Server::readMessage(SocketInfo &sockInfo)
@@ -192,6 +185,7 @@ int Server::sendMessage(SocketInfo &sockInfo, int sock_to)
                 debug_traffic(sockInfo.name, "send", it->first, it->second);
 //              TODO  delete []it->first;
             }
+            sockInfo.parseData(buffer);
             sockInfo.hystory.push_back(buffer);
         }
     }  catch (...) {
@@ -253,20 +247,20 @@ void Server::loop() {
         close(listenfd);
         return ;
     }
-//    static int debug_int = 0;
+    static int debug_int = 0;
     while(true) {
         // ждём соединения
         clilen = sizeof (cliaddr);
         Request req;
         req.sockfd = (SOCKET)accept(listenfd, (struct sockaddr*)&cliaddr, &clilen);
-//        if(debug_int > 0)
-//            continue;
+        if(debug_int > 0)
+            continue;
         if(set.find(req.sockfd) == set.end()) {
             printf("connect from %s, port %d \en \n", inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
             set.insert(req.sockfd);
             std::thread thread(&Server::forwardRequest, this, req.sockfd);
             thread.detach();
-//            debug_int++;
+            debug_int++;
         } else {
             printf("alredy connect from %s, port %d \en \n", inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
         }
@@ -336,5 +330,100 @@ int SocketInfo::initPackSeq(char *buff, int offset, int len)
 //        dat_to_send.push(buffer);
 //        buffer = new std::pair<int, std::list<std::pair<char*, int>>*> {id, new std::list<std::pair<char*, int>> };
 //    }
+    return 0;
+}
+
+int SocketInfo::parseData(std::pair<int, std::list<std::pair<char *, int> > *> *buffer)
+{
+    int tmp = 0;
+    uint32_t utmp = 0;
+    for(auto it = buffer->second->begin(); it != buffer->second->end(); it++) {
+        char *pch = it->first;
+        for(size_t i = 4; i < it->second; i++) {
+            char ch = pch[i];
+            switch (state) {
+            case STATE_HANDSHAKE:
+                handshake = ch;
+                state = STATE_VERSET_VERSION;
+                break;
+            case STATE_VERSET_VERSION:
+                tmp++;
+                sql_version.push_back(ch);
+                if(tmp == LEN_VERSIGON_SQL) {
+                    tmp = 0;
+                    state = STATE_CONNECTION_ID;
+                }
+                break;
+            case STATE_CONNECTION_ID:
+                connection_id = *reinterpret_cast<uint32_t*>(&pch[i]);
+                i += LEN_CONN_ID;
+                state = STATE_PLUGIN_DATA;
+                break;
+            case STATE_PLUGIN_DATA:
+                tmp++;
+                plugin_data.push_back(ch);
+                if(tmp == LEN_PLUGINT_DATA) {
+                    tmp = 0;
+                    state = STATE_FILTER;
+                }
+                break;
+            case STATE_FILTER:
+                filter = ch;
+                state = STATE_CAPACITY_FLAGS_LOWER;
+                break;
+            case STATE_CAPACITY_FLAGS_LOWER:
+                capability_flags = *reinterpret_cast<uint16_t*>(&pch[i]);
+                i++;
+                state = STATE_CHARACTER_SET;
+                break;
+            case STATE_CHARACTER_SET:
+                character_set = ch;
+                state = STATE_STATUS_FLAGS;
+                break;
+            case STATE_STATUS_FLAGS:
+                status_flags = *reinterpret_cast<uint16_t*>(&pch[i]);
+                i++;
+                state = STATE_CAPACITY_FLAGS_UPPER;
+                break;
+            case STATE_CAPACITY_FLAGS_UPPER:
+                utmp = *reinterpret_cast<uint16_t*>(&pch[i]);
+                capability_flags |= utmp << 16;
+                i++;
+                if(capability_flags & CLIENT_PLUGIN_AUTH) {
+                    state = STATE_AUTH_PLUGIN_DATA_LEN;
+                } else {
+                    state = STATE_CONSTANTE_ZEERO;                    // std::cout << "STATE_AUTH_PLUGIN_DATA_LEN not support" << std::endl;
+                }
+                break;
+            case STATE_AUTH_PLUGIN_DATA_LEN:
+                auth_plugin_data_len = ch;
+                state = STATE_RESERVERD;
+                break;
+            case STATE_CONSTANTE_ZEERO:
+                const_zeero = ch;
+                state = STATE_RESERVERD;
+                break;
+            case STATE_RESERVERD:
+                reserverd.push_back(ch);
+                tmp++;
+                if(tmp == LEN_RESERVED) {
+                    tmp = 0;
+                    state = STATE_PLUGIN_DATA_2;
+                }
+                break;
+            case STATE_PLUGIN_DATA_2:
+                plugin_data.push_back(ch);
+                if(++tmp == std::max(13, auth_plugin_data_len-8)) {
+                    state = STATE_AUTH_PLUGIT_NAME;
+                }
+                break;
+            case STATE_AUTH_PLUGIT_NAME:
+                auth_plugin_name.push_back(ch);
+                break;
+
+            }
+        }
+        std::cout << "stop";
+    }
     return 0;
 }

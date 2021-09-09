@@ -21,6 +21,7 @@
 #include <list>
 #include <stack>
 #include <vector>
+#include "handshakes.h"
 
 #define MAX_PACKET_SIZE         4096		// Размер буфера для чтения recv
 #define	MAXLINE					4096    /* max text line length */
@@ -75,8 +76,6 @@ enum COM_STATE {
     COM_RESET_CONNECTION    = 0x1f
 };
 
-
-
 class thread_guard {
     std::thread& t;
 public:
@@ -104,58 +103,6 @@ public:
     scoped_thread& operator=(scoped_thread const&)=delete;
 };
 
-
-
-
-#define         LEN_VERSIGON_SQL    6
-#define         LEN_CONN_ID         4
-#define         LEN_PLUGINT_DATA    8
-#define         LEN_RESERVED        10
-
-
-/* Status Flags */
-#define     SERVER_STATUS_IN_TRANS                  0x0001	//a transaction is active
-#define     SERVER_STATUS_AUTOCOMMIT                0x0002	//auto-commit is enabled
-#define     SERVER_MORE_RESULTS_EXISTS              0x0008	//
-#define     SERVER_STATUS_NO_GOOD_INDEX_USED        0x0010	//
-#define     SERVER_STATUS_NO_INDEX_USED             0x0020	//
-#define     SERVER_STATUS_CURSOR_EXISTS             0x0040	//Used by Binary Protocol Resultset to signal that COM_STMT_FETCH must be used to fetch the row-data.
-#define     SERVER_STATUS_LAST_ROW_SENT             0x0080	//
-#define     SERVER_STATUS_DB_DROPPED                0x0100	//
-#define     SERVER_STATUS_NO_BACKSLASH_ESCAPES      0x0200	//
-#define     SERVER_STATUS_METADATA_CHANGED          0x0400	//
-#define     SERVER_QUERY_WAS_SLOW                   0x0800	//
-#define     SERVER_PS_OUT_PARAMS                    0x1000	//
-#define     SERVER_STATUS_IN_TRANS_READONLY         0x2000	//in a read-only transaction
-#define     SERVER_SESSION_STATE_CHANGED            0x4000	//connection state information has changed
-
-/*  Capability Flags */
-#define     CLIENT_LONG_PASSWORD                    0x00000001
-#define     CLIENT_FOUND_ROWS                       0x00000002
-#define     CLIENT_LONG_FLAG                        0x00000004
-#define     CLIENT_CONNECT_WITH_DB                  0x00000008
-#define     CLIENT_NO_SCHEMA                        0x00000010
-#define     CLIENT_COMPRESS                         0x00000020
-#define     CLIENT_ODBC                             0x00000080
-#define     CLIENT_IGNORE_SPACE                     0x00000100
-#define     CLIENT_PROTOCOL_41                      0x00000200
-#define     CLIENT_INTERACTIVE                      0x00000400
-#define     CLIENT_SSL                              0x00000800
-#define     CLIENT_IGNORE_SIGPIPE                   0x00001000
-#define     CLIENT_TRANSACTIONS                     0x00002000
-#define     CLIENT_RESERVED                         0x00004000
-#define     CLIENT_SECURE_CONNECTION                0x00008000
-#define     CLIENT_MULTI_STATEMENTS                 0x00010000
-#define     CLIENT_MULTI_RESULTS                    0x00020000
-#define     CLIENT_PS_MULTI_RESULTS                 0x00040000
-#define     CLIENT_PLUGIN_AUTH                      0x00080000
-#define     CLIENT_CONNECT_ATTRS                    0x00100000
-#define     CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA   0x00200000
-#define     CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS     0x00400000
-#define     CLIENT_SESSION_TRACK                    0x00800000
-#define     CLIENT_DEPRECATE_EOF                    0x01000000
-
-
 struct SocketInfo {
     SocketInfo() {
         buffer = new std::pair<int, std::list<std::pair<char*, int>>*> {0, new std::list<std::pair<char*, int>> };
@@ -174,37 +121,21 @@ struct SocketInfo {
     std::pair<int, std::list<std::pair<char*, int>>*> *buffer;
     std::queue<std::pair<int, std::list<std::pair<char*, int>>*>*> date_to_send;
     std::list<std::pair<int, std::list<std::pair<char*, int>>*>*> hystory;
-    uint8_t id;                 // Командная фаза, сбрасывается в нуль при новой фазе
+    uint8_t id = 1;                 // Командная фаза, сбрасывается в нуль при новой фазе
     uint32_t size;
     uint32_t current_size = 0;
     uint32_t remaind_length_buff = 0;
     int socket = 0;
-
-    enum STATE {STATE_HANDSHAKE, STATE_VERSET_VERSION, STATE_CONNECTION_ID, STATE_PLUGIN_DATA, STATE_FILTER,
-                STATE_CAPACITY_FLAGS_LOWER, STATE_CHARACTER_SET, STATE_STATUS_FLAGS, STATE_CAPACITY_FLAGS_UPPER,
-                STATE_CONSTANTE_ZEERO, STATE_AUTH_PLUGIN_DATA_LEN, STATE_RESERVERD,
-                STATE_PLUGIN_DATA_2, STATE_AUTH_PLUGIT_NAME} state = STATE_HANDSHAKE;
-    uint8_t handshake;
-    std::string sql_version;
-    uint32_t connection_id;
-    std::vector<uint8_t> plugin_data;
-    uint8_t filter;                        // 0x00
-    uint32_t capability_flags;
-    uint16_t status_flags;
-    uint8_t character_set;    /* mysql> SELECT CHARACTER_SET_NAME, COLLATION_NAME
-                                        FROM INFORMATION_SCHEMA.COLLATIONS
-                                        WHERE ID = 255; */
-    int auth_plugin_data_len;       // length of the combined auth_plugin_data
-    std::string auth_plugin_name;       // name of the auth_method that the auth_plugin_data belongs to
-    std::vector<uint8_t> reserverd;
-    uint8_t const_zeero;
-    int length_rest_plugin_part;
-    int parseData(std::pair<int, std::list<std::pair<char*, int>>*> *buffer);
 };
 
 struct Connection {
+    enum STATE {STATE_RECV_SERVER, STATE_RECV_CLIENT, STATE_SEND_SERVER, STATE_SEND_CLIENT}; // Последнее событие
     SocketInfo client;
     SocketInfo server;
+
+    int parseHandShake(STATE state);
+
+    Handshakes handshake;
 };
 
 
@@ -241,7 +172,6 @@ class Server
     int readMessage(SocketInfo &sockInfo);
     int sendMessage(SocketInfo &sockInfo, int sock_to);
     void debug_traffic(std::string name, std::string func, const char *buff, int len);
-    void parseSendError(int ret);
 public:
     Server();
     void loop();

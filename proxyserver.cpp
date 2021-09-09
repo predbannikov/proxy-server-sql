@@ -104,6 +104,8 @@ int Server::forwardRequest(int sockfd)
                 if((ret = readMessage(conn.client)) <= 0)
                     return printError(conn, ret, "client readMessage");
 
+                conn.parseHandShake(Connection::STATE_RECV_CLIENT);
+
                 if((ret = sendMessage(conn.client, conn.server.socket)) < 0)
                     return printError(conn, ret, "client sendMessage");
 
@@ -112,6 +114,8 @@ int Server::forwardRequest(int sockfd)
 
                 if((ret = readMessage(conn.server)) <= 0)
                     return printError(conn, ret, "server readMessage");
+
+                conn.parseHandShake(Connection::STATE_RECV_SERVER);
 
                 if((ret = sendMessage(conn.server, conn.client.socket)) < 0)
                     return printError(conn, ret, "server sendMessage");
@@ -139,6 +143,9 @@ int Server::readMessage(SocketInfo &sockInfo)
         }
         if(len > 3000) {
             debug_int++;
+        }
+        if(sockInfo.name == "client") {
+            std::cout << "stop" << std::endl;
         }
 //        debug_traffic(sockInfo.name, "recv", buff, len);
         while (len > 0) { // если длина всё ещё больше ожидаемого следующего размера запускаем снова
@@ -179,13 +186,12 @@ int Server::sendMessage(SocketInfo &sockInfo, int sock_to)
             for(auto it = buffer->second->begin(); it != buffer->second->end(); it++) {
                 if((ret = send(sock_to, it->first, it->second, MSG_NOSIGNAL)) < 0) {
                     std::cerr << "send error " << std::strerror(errno) << std::endl;
-                    this->parseSendError(ret);
                     throw ;
                 }
                 debug_traffic(sockInfo.name, "send", it->first, it->second);
 //              TODO  delete []it->first;
             }
-            sockInfo.parseData(buffer);
+//            sockInfo.parseData(buffer);
             sockInfo.hystory.push_back(buffer);
         }
     }  catch (...) {
@@ -253,8 +259,8 @@ void Server::loop() {
         clilen = sizeof (cliaddr);
         Request req;
         req.sockfd = (SOCKET)accept(listenfd, (struct sockaddr*)&cliaddr, &clilen);
-        if(debug_int > 0)
-            continue;
+//        if(debug_int > 0)
+//            continue;
         if(set.find(req.sockfd) == set.end()) {
             printf("connect from %s, port %d \en \n", inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
             set.insert(req.sockfd);
@@ -273,49 +279,15 @@ void Server::connectionsHandler()
 
 }
 
-void Server::parseSendError(int ret)
-{
-    switch (ret) {
-    case EBADF:
-        std::cerr << "An invalid descriptor was specified" << std::endl;
-        break;
-    case ENOTSOCK:
-        std::cerr << "The argument sockfd is not a socket" << std::endl;
-        break;
-    case EFAULT:
-        std::cerr << "An invalid user space address was specified for an argument" << std::endl;
-        break;
-    case EMSGSIZE:
-        std::cerr << "The socket type requires that message be sent atomically, and the size of the message to be sent made this impossible" << std::endl;
-        break;
-    case EAGAIN:
-        std::cerr << "The socket is marked nonblocking and the requested operation would block. POSIX.1-2001 allows either error to be returned for this case, and does not require these constants to have the same value, so a portable application should check for both possibilities" << std::endl;
-        break;
-    case ENOBUFS:
-        std::cerr << "The output queue for a network interface was full. This generally indicates that the interface has stopped sending, but may be caused by transient congestion. (Normally, this does not occur in Linux. Packets are just silently dropped when a device queue overflows.)" << std::endl;
-        break;
-    case EINTR:
-        std::cerr << "A signal occurred before any data was transmitted; see signal(7)" << std::endl;
-        break;
-    case ENOMEM:
-        std::cerr << "No memory available" << std::endl;
-        break;
-    case EINVAL:
-        std::cerr << "Invalid argument passed" << std::endl;
-        break;
-    case EPIPE:
-        std::cerr << "The local end has been shut down on a connection oriented socket. In this case the process will also receive a SIGPIPE unless MSG_NOSIGNAL is set" << std::endl;
-        break;
-    }
-}
-
 int SocketInfo::initPackSeq(char *buff, int offset, int len)
 {
     if(current_size == 0) {
-        if(id == 0) {
+        int id_tmp = (*reinterpret_cast<uint32_t*>(buff) >> 24);
+        if(id_tmp == 0) {
             newPhase();
         } else {
-            id = (*reinterpret_cast<uint32_t*>(buff) >> 24);
+            id = (*reinterpret_cast<uint32_t*>(&buff[offset]) >> 24);        // offset тут не нужен, так как этот блок else выполняется только в случае
+//            id = (*reinterpret_cast<uint32_t*>(buff) >> 24);        // offset тут не нужен, так как этот блок else выполняется только в случае
             buffer->first = id;
             buffer->second = new std::list<std::pair<char*, int>>;
         }
@@ -324,106 +296,37 @@ int SocketInfo::initPackSeq(char *buff, int offset, int len)
     } else {
         remaind_length_buff = size - remaind_length_buff + OFFSET_DATA_HEADER;
     }
-    // узнаём данные следующего пакета
-
-//    else if(id != old_id) {
-//        dat_to_send.push(buffer);
-//        buffer = new std::pair<int, std::list<std::pair<char*, int>>*> {id, new std::list<std::pair<char*, int>> };
-//    }
     return 0;
 }
 
-int SocketInfo::parseData(std::pair<int, std::list<std::pair<char *, int> > *> *buffer)
+int Connection::parseHandShake(STATE state)
 {
-    int tmp = 0;
-    uint32_t utmp = 0;
-    for(auto it = buffer->second->begin(); it != buffer->second->end(); it++) {
-        char *pch = it->first;
-        for(size_t i = 4; i < it->second; i++) {
-            char ch = pch[i];
-            switch (state) {
-            case STATE_HANDSHAKE:
-                handshake = ch;
-                state = STATE_VERSET_VERSION;
-                break;
-            case STATE_VERSET_VERSION:
-                tmp++;
-                sql_version.push_back(ch);
-                if(tmp == LEN_VERSIGON_SQL) {
-                    tmp = 0;
-                    state = STATE_CONNECTION_ID;
-                }
-                break;
-            case STATE_CONNECTION_ID:
-                connection_id = *reinterpret_cast<uint32_t*>(&pch[i]);
-                i += LEN_CONN_ID;
-                state = STATE_PLUGIN_DATA;
-                break;
-            case STATE_PLUGIN_DATA:
-                tmp++;
-                plugin_data.push_back(ch);
-                if(tmp == LEN_PLUGINT_DATA) {
-                    tmp = 0;
-                    state = STATE_FILTER;
-                }
-                break;
-            case STATE_FILTER:
-                filter = ch;
-                state = STATE_CAPACITY_FLAGS_LOWER;
-                break;
-            case STATE_CAPACITY_FLAGS_LOWER:
-                capability_flags = *reinterpret_cast<uint16_t*>(&pch[i]);
-                i++;
-                state = STATE_CHARACTER_SET;
-                break;
-            case STATE_CHARACTER_SET:
-                character_set = ch;
-                state = STATE_STATUS_FLAGS;
-                break;
-            case STATE_STATUS_FLAGS:
-                status_flags = *reinterpret_cast<uint16_t*>(&pch[i]);
-                i++;
-                state = STATE_CAPACITY_FLAGS_UPPER;
-                break;
-            case STATE_CAPACITY_FLAGS_UPPER:
-                utmp = *reinterpret_cast<uint16_t*>(&pch[i]);
-                capability_flags |= utmp << 16;
-                i++;
-                if(capability_flags & CLIENT_PLUGIN_AUTH) {
-                    state = STATE_AUTH_PLUGIN_DATA_LEN;
-                } else {
-                    state = STATE_CONSTANTE_ZEERO;                    // std::cout << "STATE_AUTH_PLUGIN_DATA_LEN not support" << std::endl;
-                }
-                break;
-            case STATE_AUTH_PLUGIN_DATA_LEN:
-                auth_plugin_data_len = ch;
-                state = STATE_RESERVERD;
-                break;
-            case STATE_CONSTANTE_ZEERO:
-                const_zeero = ch;
-                state = STATE_RESERVERD;
-                break;
-            case STATE_RESERVERD:
-                reserverd.push_back(ch);
-                tmp++;
-                if(tmp == LEN_RESERVED) {
-                    tmp = 0;
-                    state = STATE_PLUGIN_DATA_2;
-                }
-                break;
-            case STATE_PLUGIN_DATA_2:
-                plugin_data.push_back(ch);
-                if(++tmp == std::max(13, auth_plugin_data_len-8)) {
-                    state = STATE_AUTH_PLUGIT_NAME;
-                }
-                break;
-            case STATE_AUTH_PLUGIT_NAME:
-                auth_plugin_name.push_back(ch);
-                break;
-
-            }
+    try {
+        std::pair<int, std::list<std::pair<char*, int>>*> *buffer;
+        switch (state) {
+        case STATE_RECV_SERVER:
+            if(server.date_to_send.empty())
+                return -1;
+            buffer = server.date_to_send.front();
+            break;
+        case STATE_RECV_CLIENT:
+            if(client.date_to_send.empty())
+                return -1;
+            buffer = client.date_to_send.front();
+            break;
+        case STATE_SEND_SERVER:
+            break;
+        case STATE_SEND_CLIENT:
+            break;
         }
-        std::cout << "stop";
+        for(auto it = buffer->second->begin(); it != buffer->second->end(); it++)
+            handshake.parsePackage(it->first, it->second, buffer->first);
+
+    }  catch (...) {
+        std::cout << "ERROR: int Server::sendMessage(SocketInfo&)" << std::endl;
+        return errno;
     }
+    return 0;
+
     return 0;
 }
